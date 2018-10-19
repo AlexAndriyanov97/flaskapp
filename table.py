@@ -1,29 +1,33 @@
 import pandas as pd
-from bokeh.io import curdoc
-from bokeh.models import Select, Button, Range1d, ColumnDataSource, LinearColorMapper
+from bokeh.io import output_file, show, curdoc
+from bokeh.models import BasicTicker, Select, Button, Range1d, ColorBar, ColumnDataSource, LinearColorMapper, \
+    PrintfTickFormatter
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
 from bokeh.transform import transform, dodge
-from bokeh.events import Tap
-from bokeh.models.widgets import CheckboxGroup
-from bokeh.models.widgets import RadioButtonGroup
+from bokeh.events import Tap, Press
+from bokeh.models.widgets import Panel, Tabs, RadioButtonGroup, CheckboxGroup
+from bokeh.models.widgets.sliders import RangeSlider
 import os
 import numpy
 
 
 class Page():
+
     def __init__(self):
+        self.WIDTH_MATRIX = 1
+        self.HEIGHT_MATRIX = 1
         self.tabs = RadioButtonGroup(labels=['Page1', 'Page2'], active=0)
         self.tabs.on_change('active', lambda attr, old, new: self.change_page())
 
-        self.data_directory = '/home/alex/flask/flaskapp/data'
+        self.data_directory = 'data'
         self.data_files = os.listdir(self.data_directory)
 
         self.select_data_files1 = Select(title="Data files 1:", value="df1", options=["df1"] + self.data_files)
         self.select_data_files2 = Select(title="Data files 2:", value="df2", options=["df2"] + self.data_files)
 
-        self.select_data_files1.on_change('value', lambda attr, old, new: self.update_page())
-        self.select_data_files2.on_change('value', lambda attr, old, new: self.update_page())
+        self.select_data_files1.on_change('value', lambda attr, old, new: self.init_dataframes())
+        self.select_data_files2.on_change('value', lambda attr, old, new: self.init_dataframes())
         self.refresh_button = Button(label="Refresh", button_type="success", width=100)
         self.refresh_button.on_click(self.update_directory)
 
@@ -35,40 +39,59 @@ class Page():
 
     def change_page(self):
         if (self.select_data_files1.value == "df1" or self.select_data_files2.value == "df2"):
-            self.tabs.active = 0;
+            self.tabs.active = 0
             return
         if (self.tabs.active == 0):
-            self.layout.children = [self.tabs, row(self.select_data_files1, self.select_data_files2),
-                                    self.refresh_button, self.plot_matrix]
+            self.layout.children = [self.tabs,
+                                    row(self.select_data_files1, self.select_data_files2),
+                                    self.refresh_button,
+                                    self.slider_depth,
+                                    self.plot_matrix]
         elif (self.tabs.active == 1):
             self.layout.children = [self.tabs,
-                                    self.sel_well, self.pred_button,
+                                    # self.sel_well,self.pred_button,
                                     self.plots_rock,
                                     row(column(self.select_df1_corr, self.checkbox_df1),
                                         column(self.select_df2_corr, self.checkbox_df2)),
                                     self.plot_correlation]
 
-    def update_page(self):
+    def init_dataframes(self):
         if (self.select_data_files1.value == "df1" or self.select_data_files2.value == "df2"):
             return
+        if (not self.select_data_files1.value.endswith('.csv') or not self.select_data_files2.value.endswith('.csv')):
+            print("incorrect data, expected format csv")
+            return
+
         self.Y_COL = 'Depth'
+        self.main_df1, self.main_df2 = self.read_dataframe()
+        # self.change
+        self.df1 = self.main_df1.copy()
+        self.df2 = self.main_df2.copy()
+        self.slider_depth = RangeSlider(start=self.min_total_depth(self.main_df1, self.main_df2),
+                                        # изменить реализацию мин и мах
+                                        end=self.max_total_depth(self.main_df1, self.main_df2), step=1,
+                                        value=(self.min_total_depth(self.main_df1, self.main_df2),
+                                               self.max_total_depth(self.main_df1, self.main_df2)))
+        self.slider_depth.on_change('value', self.change_depth)
 
-        self.df1 = pd.read_csv('data/ml_training_data.csv')
-        self.df2 = pd.read_csv('data/ml_training_data.csv')
+        self.update_page()
 
-        self.columns_df1 = [col for col in self.df1.columns if self.is_number(col)]
-        self.columns_df2 = [col for col in self.df2.columns if self.is_number(col)]
-
+    def update_page(self):
+        print("1")
+        self.columns_df1 = [col for col in self.df1.columns if self.is_number(col, self.df1)]
+        self.columns_df2 = [col for col in self.df2.columns if self.is_number(col, self.df2)]
         # self.select_plots = [-1 for i in range(len(self.columns_df1) + len(self.columns_df1))]
         self.select_plots = []
-        wells = self.df1['Well Name'].unique().tolist()
-        wells = [well for well in wells if well not in ['Recruit F9']]
+        print("2")
+        #	wells = self.df1['Well Name'].unique().tolist()
+        #	wells = [well for well in wells if well not in ['Recruit F9']]
 
-        self.sel_well = Select(title="Well name:", value=wells[0], options=wells)
-        self.pred_button = Button(label="Predict", button_type="success", width=100)
-        self.pred_button.on_click(self.update_predict)
+        # self.sel_well = Select(title="Well name:", value=wells[0], options=wells)
+        # self.pred_button = Button(label="Predict", button_type="success", width=100)
+        # self.pred_button.on_click(self.update_predict)
 
         # self.plots_rock = self.init_plots_rock()
+
         self.plots_rock = column()
         self.source_correlation_plot = None
         self.plot_correlation = self.init_corr()
@@ -76,47 +99,116 @@ class Page():
         self.select_df1_corr = Select(title="Data frame 1:", value=self.columns_df1[0], options=self.columns_df1)
         self.select_df2_corr = Select(title="Data frame 2:", value=self.columns_df2[1], options=self.columns_df2)
 
-        self.select_df1_corr.on_change('value', lambda attr, old, new: self.update_set_data_())
-        self.select_df2_corr.on_change('value', lambda attr, old, new: self.update_set_data_())
+        self.select_df1_corr.on_change('value', lambda attr, old, new: self.update_set_data())
+        self.select_df2_corr.on_change('value', lambda attr, old, new: self.update_set_data())
 
         self.checkbox_df1 = CheckboxGroup(labels=["log10"], active=[])
         self.checkbox_df2 = CheckboxGroup(labels=["log10"], active=[])
-        self.checkbox_df1.on_change('active', lambda attr, old, new: self.update_set_data_())
-        self.checkbox_df2.on_change('active', lambda attr, old, new: self.update_set_data_())
-
+        self.checkbox_df1.on_change('active', lambda attr, old, new: self.update_set_data())
+        self.checkbox_df2.on_change('active', lambda attr, old, new: self.update_set_data())
+        print("3")
         data_matrix = self.init_data_matrix(self.df1, self.df2)
         self.plot_matrix = self.draw_matrix(data_matrix)
         self.plot_matrix.on_event(Tap, self.update_plots)
-
+        print("4")
         self.layout.children = [self.tabs, row(self.select_data_files1, self.select_data_files2),
-                                self.refresh_button, self.plot_matrix]
+                                self.refresh_button,
+                                self.slider_depth,
+                                self.plot_matrix]
+        print("5")
+    def change_depth(self, attr, old, new):
+        self.df1 = self.df1[
+            (self.df1[self.Y_COL] >= self.slider_depth.value[0]) & (self.df1[self.Y_COL] <= self.slider_depth.value[1])]
+        self.df2 = self.df2[
+            (self.df2[self.Y_COL] >= self.slider_depth.value[0]) & (self.df2[self.Y_COL] <= self.slider_depth.value[1])]
+        self.update_page()
 
-    def is_number(self, col):
-        if (type(self.df1[col][0]).__name__ == "int64" or type(self.df1[col][0]).__name__ == "float64"):
+    def min_total_depth(self, df1, df2):
+        print(df1.keys())
+        return max(df1[self.Y_COL].min(), df2[self.Y_COL].min())
+
+    def max_total_depth(self, df1, df2):
+        return min(df1[self.Y_COL].max(), df2[self.Y_COL].max())
+
+    def change_case_depth(self, df1, df2):
+        ret_code = self.rename_depth(df1)
+        # Обработать код возврата
+        ret_code = self.rename_depth(df2)
+        if df1[self.Y_COL][1] - df1[self.Y_COL][0] > df2[self.Y_COL][1] - df2[self.Y_COL][0]:
+            df2.set_index([self.Y_COL], inplace=True)
+            print(df2.columns)
+            df2.reindex(df1[self.Y_COL], method='nearest')
+            column_values = pd.Series(df2.index, index=df2.index)
+            df2.insert(loc=0, column=self.Y_COL, value=column_values)
+            df2.set_index(df1.index, inplace=True)
+        else:
+            df1.set_index([self.Y_COL], inplace=True)
+            print(1)
+            print(df1.columns)
+            df1.reindex(df2[self.Y_COL], method='nearest')
+            column_values = pd.Series(df1.index, index=df1.index)
+            df1.insert(loc=0, column=self.Y_COL, value=column_values)
+            df1.set_index(df2.index,inplace=True)
+
+
+    def rename_depth(self, df):
+        is_renamed_df = False
+        dept = "Dept"
+        unnamed = "Unnamed: 0"
+        exist = 0
+        not_exist = 1
+        for col in df.columns:
+            if (col.lower() == self.Y_COL.lower() or col.lower() == dept.lower()):
+                df.rename(columns={col: self.Y_COL}, inplace=True)
+                print(col)
+                is_renamed_df = True
+        if (not is_renamed_df):
+            if (df.index.name == None and df.columns[0] == unnamed):
+                df.rename(columns={unnamed: self.Y_COL}, inplace=True)
+                return not_exist
+            elif (df.index.name != None and df.index.name.lower().find(dept.lower()) != -1):
+                column_values = pd.Series(df.index, index=df.index)
+                df.insert(loc=0, column=self.Y_COL, value=column_values)
+                return not_exist
+            elif ((df.columns)[0] != unnamed and df.columns[0].lower().find(dept.lower()) != -1):
+                df.rename(columns={unnamed: self.Y_COL}, inplace=True)
+                return not_exist
+            else:
+                column_values = pd.Series(df.index, index=df.index)
+                df.insert(loc=0, column=self.Y_COL, value=column_values)
+                return not_exist
+        return exist
+
+    '''	if(df1)
+        df_gis = pd.read_csv('gis.csv') 
+        df_gis = df_gis.astype(np.float32) 
+
+        df_git = pd.read_csv('git.csv') 
+        df_git = df_git.rename(columns={'0':'DEPT'}) 
+
+        df_gis = df_gis.set_index(['DEPT']) 
+        df_gis.reindex(df_git['DEPT'], method='nearest')'''
+
+    def is_number(self, col, df):
+        print(col)
+        print(df[col])
+        if type(df[col][0]).__name__ == "int64" or type(df[col][0]).__name__ == "float64":
             return True
         return False
 
     def update_directory(self):
-        self.data_directory = '/home/alex/flask/flaskapp/data/'
+        self.data_directory = 'data'
         self.data_files = os.listdir(self.data_directory)
         self.select_data_files1 = Select(title="Data files 1:", value="df1", options=["df1"] + self.data_files)
         self.select_data_files2 = Select(title="Data files 2:", value="df2", options=["df2"] + self.data_files)
         self.layout.children[1] = row(self.select_data_files1, self.select_data_files2)
-
-    def init_plots_rock(self):
-        sdata1 = self.df1[self.df1['Well Name'] == self.sel_well.value]
-        yrange1 = self.get_y_range(sdata1)
-        sdata2 = self.df2[self.df2['Well Name'] == self.sel_well.value]
-        yrange2 = self.get_y_range(sdata2)
-        plots = column(row([self.draw_plot_rock(sdata1, col, yrange1) for i, col in enumerate(self.columns_df1)]),
-                       row([self.draw_plot_rock(sdata2, col, yrange2) for i, col in enumerate(self.columns_df1)]))
-        return plots
 
     def init_corr(self):
         plot_correlation = figure(plot_width=800, plot_height=500, title='correlation graph')
         data = pd.DataFrame(data={'x': self.df1[self.columns_df1[0]], 'y': self.df2[self.columns_df2[1]]})
         self.source_correlation_plot = ColumnDataSource(data)
         plot_correlation.scatter(x='x', y='y', source=self.source_correlation_plot, line_color='red', size=2)
+
         return plot_correlation
 
     def toFixed(self, numObj, digits=0):
@@ -129,53 +221,29 @@ class Page():
         return res
 
     def update_plots(self, event):
-        length_columns = len(self.columns_df1)  # !!!
-        x = int(event.x)  # /self.plot_matrix.width)
-        y = int(event.y)  # /self.plot_matrix.height)
-        if (self.select_plots.count((1, self.columns_df1[x])) == 1 and self.select_plots.count(
-                (2, self.columns_df2[length_columns - y - 1])) == 1):
+        length_columns_df1 = len(self.columns_df1)
+        length_columns_df2 = len(self.columns_df2)
+        x = int((event.x) / self.WIDTH_MATRIX)
+        y = int((event.y) / self.HEIGHT_MATRIX)
+        if (self.select_plots.count(
+                ((1, self.columns_df1[x]), (2, self.columns_df2[length_columns_df2 - y - 1]))) == 1):
+            self.select_plots.remove(((1, self.columns_df1[x]), (2, self.columns_df2[length_columns_df2 - y - 1])))
+            self.delete_select_cell(name=self.columns_df1[x] + self.columns_df2[length_columns_df2 - y - 1])
 
-            self.select_plots.remove((1, self.columns_df1[x]))
-            self.select_plots.remove((2, self.columns_df2[length_columns - y - 1]))
-            self.plot_matrix.select(name=self.columns_df1[x]+self.columns_df2[length_columns - y - 1]).visible=False
-        elif (event.x < 0 or event.x > length_columns):
-            if (self.select_plots.count((2, self.columns_df2[length_columns - y - 1])) == 1):
-                self.select_plots.remove((2, self.columns_df2[length_columns - y - 1]))
-                self.plot_matrix.select(name=self.columns_df2[length_columns - y - 1]).visible=False
-            else:
-                self.select_plots.append((2, self.columns_df2[length_columns - y - 1]))
-                self.plot_matrix.rect(x=length_columns/2,y=y+0.5,width=length_columns,height=1,fill_alpha=0,line_color="blue",name=self.columns_df2[length_columns - y - 1])
-        elif (event.y < 0 or event.y > length_columns):
-            if (self.select_plots.count((1, self.columns_df1[x])) == 1):
-                self.select_plots.remove((1, self.columns_df1[x]))
-                self.plot_matrix.select(name=self.columns_df1[x]).visible = False
-            else:
-                self.select_plots.append((1, self.columns_df1[x]))
-                self.plot_matrix.rect(x=x+0.5,y=length_columns/2,width=1,height=length_columns,fill_alpha=0,line_color="blue",name=self.columns_df1[x])
-        elif ((event.x or event.x > length_columns < 0) and (event.y < 0) or event.y > length_columns):
+        elif (event.x < 0 or event.x > length_columns_df1 or event.y < 0 or event.y > length_columns_df2):
             return
         else:
-            self.select_plots.append((1, self.columns_df1[x]))
-            self.select_plots.append((2, self.columns_df2[length_columns - y - 1]))
-            self.plot_matrix.rect(x=x+0.5,y=y+0.5,width=1,height=1,fill_alpha=0,line_color="blue",name=self.columns_df1[x]+self.columns_df2[length_columns - y - 1])
+            self.draw_select_cell(name=self.columns_df1[x] + self.columns_df2[length_columns_df2 - y - 1], x=x + 0.5,
+                                  y=y + 0.5, width=1, height=1)
+            self.select_plots.append(((1, self.columns_df1[x]), (2, self.columns_df2[length_columns_df2 - y - 1])))
 
-        sdata1 = self.df1[self.df1['Well Name'] == self.sel_well.value]
-        yrange1 = self.get_y_range(sdata1)
-        sdata2 = self.df2[self.df2['Well Name'] == self.sel_well.value]
-        yrange2 = self.get_y_range(sdata2)
-        plots1 = row([self.draw_plot_rock(sdata1, sdata2, col, yrange1, yrange2) for col in self.select_plots])
-        # plots2 = row([self.draw_plot_rock(sdata2, col2, yrange2) for col2 in enumerate(self.columns_df2) if self.select_plots[length_columns+j] == 1])
-        self.plots_rock.children = [plots1]
+        self.plots_rock.children = [self.draw_plot_rock(self.df1, self.df2, self.select_plots)]
 
-    def update_set_data_(self):
-        r = self.df1[self.select_df1_corr.value]
-        col = self.df2[self.select_df2_corr.value]
-        if (self.checkbox_df2.active == [0]):
-            col = col.apply(numpy.log10)
-        if (self.checkbox_df1.active == [0]):
-            r = r.apply(numpy.log10)
-        data = {'x': r, 'y': col}
-        self.source_correlation_plot.data = data
+    def draw_select_cell(self, name, x, y, height, width):
+        self.plot_matrix.rect(x=x, y=y, width=width, height=height, fill_alpha=0, line_color="blue", name=name)
+
+    def delete_select_cell(self, name):
+        self.plot_matrix.select(name=name).visible = False
 
     def update_set_data(self):
         r = self.df1[self.select_df1_corr.value]
@@ -184,33 +252,32 @@ class Page():
             col = col.apply(numpy.log10)
         if (self.checkbox_df1.active == [0]):
             r = r.apply(numpy.log10)
-
         data = {'x': r, 'y': col}
         self.source_correlation_plot.data = data
 
     def update_predict(self):
-        sdata1 = self.df1[self.df1['Well Name'] == self.sel_well.value]
-        yrange1 = self.get_y_range(sdata1)
-        sdata2 = self.df2[self.df2['Well Name'] == self.sel_well.value]
-        yrange2 = self.get_y_range(sdata2)
+        return
 
-        # plots1 = row([self.draw_plot_rock(sdata1, col, yrange1) for i, col in enumerate(self.columns_df1) if self.select_plots[i] == 1])
-        # plots2 = row([self.draw_plot_rock(sdata2, col2, yrange2) for j, col2 in enumerate(self.columns_df2) if self.select_plots[len(self.columns_df2)+j] == 1])
-        plots1 = row([self.draw_plot_rock(sdata1, sdata2, col, yrange1, yrange2) for col in self.select_plots])
-        self.plots_rock.children = [plots1, plots2]
+    def draw_plot_rock(self, df1, df2, select_plots):
+        list_plots = []
+        source_df1 = ColumnDataSource(data=df1)
+        source_df2 = ColumnDataSource(data=df2)
+        yrange = self.get_y_range(df1)
+        for pair_data in self.select_plots:
+            list_plots.append(
+                self.init_plot_rock(pair_data[0][1], pair_data[0][1], self.Y_COL, source_df1, yrange, '#0000ff'))
 
-    def draw_plot_rock(self, df1, df2, col, yrange1, yrange2):
-        if (col[0] == 1):
-            df = df1
-            yrange = yrange1
-        else:
-            df = df2
-            yrange = yrange2
+            list_plots.append(
+                self.init_plot_rock(pair_data[1][1], pair_data[1][1], self.Y_COL, source_df2, yrange, '#008000'))
+        return row(list_plots)
 
-        source = ColumnDataSource(data=df)
-        plot = figure(plot_width=200, plot_height=400, title=col[1], toolbar_location=None, active_scroll='wheel_zoom')
-        plot.line(col[1], self.Y_COL, source=source, line_width=2)
+    def init_plot_rock(self, title, x, y, source, yrange, color_title):
+        plot = figure(plot_width=200, plot_height=400, title=title, toolbar_location=None, tools='ywheel_zoom',
+                      active_scroll='ywheel_zoom')
+        plot.line(x, y, source=source, line_width=2)
         plot.y_range = yrange
+        plot.title.text_color = color_title
+
         return plot
 
     def init_data_matrix(self, df1, df2):
@@ -233,12 +300,12 @@ class Page():
         mapper = LinearColorMapper(palette=colors, low=df.rate.min(), high=df.rate.max())
 
         plot_matrix = figure(plot_width=800, plot_height=300, title="",
-                             x_range=list(data.index), y_range=list(reversed(self.columns_df1)),
+                             x_range=list(self.columns_df2), y_range=list(reversed(self.columns_df1)),
                              toolbar_location=None, tools="", x_axis_location="above")
-
-        plot_matrix.rect(x="rows", y="columns", width=1, height=1, source=source,
+        plot_matrix.rect(x="rows", y="columns", width=self.WIDTH_MATRIX, height=self.HEIGHT_MATRIX, source=source,
                          line_color=None, fill_color=transform('rate', mapper))
-
+        plot_matrix.xaxis.major_label_text_color = '#0000ff'  # blue
+        plot_matrix.yaxis.major_label_text_color = '#008000'  # green
         self.r = plot_matrix.text(x=dodge("rows", -0.1, range=plot_matrix.x_range),
                                   y=dodge("columns", -0.2, range=plot_matrix.y_range), text="rate", **{"source": df})
         self.r.glyph.text_font_size = "9pt"
@@ -246,6 +313,18 @@ class Page():
         plot_matrix.axis.axis_line_color = None
         plot_matrix.axis.major_tick_line_color = None
         return plot_matrix
+
+    def read_dataframe(self):
+        df1 = pd.read_csv('data/' + self.select_data_files1.value)
+        df2 = pd.read_csv('data/' + self.select_data_files2.value)
+        self.change_case_depth(df1, df2)
+        min = self.min_total_depth(df1, df2)
+        max = self.max_total_depth(df1, df2)
+        print("@@@")
+        df1 = df1[(df1[self.Y_COL] >= min) & (df1[self.Y_COL] <= max)]
+        df2 = df2[(df2[self.Y_COL] >= min) & (df2[self.Y_COL] <= max)]
+        print("######")
+        return (df1, df2)
 
 
 table = Page()
