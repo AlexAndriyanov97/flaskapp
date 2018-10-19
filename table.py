@@ -116,6 +116,7 @@ class Page():
                                 self.slider_depth,
                                 self.plot_matrix]
         print("5")
+
     def change_depth(self, attr, old, new):
         self.df1 = self.df1[
             (self.df1[self.Y_COL] >= self.slider_depth.value[0]) & (self.df1[self.Y_COL] <= self.slider_depth.value[1])]
@@ -124,7 +125,6 @@ class Page():
         self.update_page()
 
     def min_total_depth(self, df1, df2):
-        print(df1.keys())
         return max(df1[self.Y_COL].min(), df2[self.Y_COL].min())
 
     def max_total_depth(self, df1, df2):
@@ -134,22 +134,20 @@ class Page():
         ret_code = self.rename_depth(df1)
         # Обработать код возврата
         ret_code = self.rename_depth(df2)
-        if df1[self.Y_COL][1] - df1[self.Y_COL][0] > df2[self.Y_COL][1] - df2[self.Y_COL][0]:
+        # if df1[self.Y_COL][1] - df1[self.Y_COL][0] > df2[self.Y_COL][1] - df2[self.Y_COL][0]:
+        if (df1[self.Y_COL].size < df2[self.Y_COL].size):
             df2.set_index([self.Y_COL], inplace=True)
-            print(df2.columns)
-            df2.reindex(df1[self.Y_COL], method='nearest')
+            df2 = df2.reindex(df1[self.Y_COL], method='nearest')
             column_values = pd.Series(df2.index, index=df2.index)
             df2.insert(loc=0, column=self.Y_COL, value=column_values)
             df2.set_index(df1.index, inplace=True)
         else:
             df1.set_index([self.Y_COL], inplace=True)
-            print(1)
-            print(df1.columns)
-            df1.reindex(df2[self.Y_COL], method='nearest')
+            df1 = df1.reindex(df2[self.Y_COL], method='nearest')
             column_values = pd.Series(df1.index, index=df1.index)
             df1.insert(loc=0, column=self.Y_COL, value=column_values)
-            df1.set_index(df2.index,inplace=True)
-
+            df1.set_index(df2.index, inplace=True)
+        return df1, df2
 
     def rename_depth(self, df):
         is_renamed_df = False
@@ -160,7 +158,6 @@ class Page():
         for col in df.columns:
             if (col.lower() == self.Y_COL.lower() or col.lower() == dept.lower()):
                 df.rename(columns={col: self.Y_COL}, inplace=True)
-                print(col)
                 is_renamed_df = True
         if (not is_renamed_df):
             if (df.index.name == None and df.columns[0] == unnamed):
@@ -190,9 +187,7 @@ class Page():
         df_gis.reindex(df_git['DEPT'], method='nearest')'''
 
     def is_number(self, col, df):
-        print(col)
-        print(df[col])
-        if type(df[col][0]).__name__ == "int64" or type(df[col][0]).__name__ == "float64":
+        if type(df[col][df[col].index[0]]).__name__ == "int64" or type(df[col][df[col].index[0]]).__name__ == "float64":
             return True
         return False
 
@@ -317,7 +312,7 @@ class Page():
     def read_dataframe(self):
         df1 = pd.read_csv('data/' + self.select_data_files1.value)
         df2 = pd.read_csv('data/' + self.select_data_files2.value)
-        self.change_case_depth(df1, df2)
+        df1, df2 = self.change_case_depth(df1, df2)
         min = self.min_total_depth(df1, df2)
         max = self.max_total_depth(df1, df2)
         print("@@@")
